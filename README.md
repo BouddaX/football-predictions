@@ -97,11 +97,25 @@ To get a local copy up and running, follow these simple steps.
    # On Mac/Linux
    export API_FOOTBALL_KEY="ENTER_YOUR_API_KEY_HERE"
    ```
-4. Run the data fetcher to generate fresh predictions:
+4. Create and activate a virtual environment:
+   ```sh
+   # On Mac/Linux
+   python3 -m venv .venv
+   source .venv/bin/activate
+
+   # On Windows (PowerShell)
+   py -m venv .venv
+   .venv\Scripts\Activate.ps1
+   ```
+5. Install the Python dependencies:
+   ```sh
+   python -m pip install -r requirements.txt
+   ```
+6. Run the data fetcher to generate fresh predictions:
    ```sh
    python scripts/fetch_predictions.py
    ```
-5. Open `index.html` in any modern web browser to view the dashboard!
+7. Open `index.html` in any modern web browser to view the dashboard!
 
 ---
 

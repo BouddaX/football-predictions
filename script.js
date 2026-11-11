@@ -71,7 +71,19 @@ async function fetchData(dayStr = 'today') {
             if (fbRes.ok) predData = await fbRes.json();
         }
 
-        if (predData && predData.matches) {
+        // If today's dedicated file is empty, use the legacy file only when
+        // it contains matches for the same date.
+        if (dayStr === 'today' && predData && Array.isArray(predData.matches) && predData.matches.length === 0) {
+            const fbRes = await fetch(`data/predictions.json?t=${timestamp}`);
+            if (fbRes.ok) {
+                const fallback = await fbRes.json();
+                if (fallback.date === predData.date && Array.isArray(fallback.matches) && fallback.matches.length > 0) {
+                    predData = fallback;
+                }
+            }
+        }
+
+        if (predData && Array.isArray(predData.matches)) {
             document.getElementById('current-date').textContent = predData.date || dayStr;
             renderPredictions(predData);
         } else {
@@ -87,6 +99,12 @@ async function fetchData(dayStr = 'today') {
         }
     } catch (error) {
         console.error("Error fetching data:", error);
+        const hint = window.location.protocol === 'file:'
+            ? ' Open the folder with a local web server (python3 -m http.server) instead of double-clicking index.html.'
+            : ' Check that the prediction JSON files are available, then reload.';
+        renderError('predictions-container', `Could not load predictions: ${error.message}.${hint}`);
+        document.getElementById('botd-container').innerHTML = '';
+        document.getElementById('bet-of-the-day').style.display = 'none';
     }
 }
 
@@ -124,7 +142,8 @@ function renderPredictions(data) {
     }
 
     if (!data.matches || data.matches.length === 0) {
-        container.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color: var(--text-secondary);">No fixtures scheduled for this day.</p>';
+        const emptyMessage = data.message || 'No fixtures or predictions are available for this day yet.';
+        container.innerHTML = `<p style="grid-column: 1/-1; text-align:center; color: var(--text-secondary);">${emptyMessage}</p>`;
         return;
     }
 

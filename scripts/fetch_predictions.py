@@ -1,7 +1,8 @@
 import os
 import json
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import time
 import shutil
 
@@ -9,19 +10,36 @@ API_KEY = os.environ.get('API_FOOTBALL_KEY')
 API_URL = "https://v3.football.api-sports.io"
 
 def fetch_api(endpoint, params):
-    if not API_KEY: return None
+    if not API_KEY:
+        raise RuntimeError("API_FOOTBALL_KEY is missing. Set it in the environment or GitHub Actions secrets.")
+
     headers = {'x-apisports-key': API_KEY}
-    response = requests.get(f"{API_URL}/{endpoint}", headers=headers, params=params)
-    if response.status_code == 200:
+    try:
+        response = requests.get(
+            f"{API_URL}/{endpoint}",
+            headers=headers,
+            params=params,
+            timeout=(10, 30)
+        )
+        response.raise_for_status()
         data = response.json()
-        return data.get('response', [])
-    return None
+    except requests.RequestException as exc:
+        raise RuntimeError(f"API-Football request failed for {endpoint}: {exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError(f"API-Football returned invalid JSON for {endpoint}.") from exc
+
+    errors = data.get('errors')
+    if errors and errors not in ({}, []):
+        raise RuntimeError(f"API-Football rejected {endpoint}: {errors}")
+
+    results = data.get('response')
+    if not isinstance(results, list):
+        raise RuntimeError(f"API-Football returned an unexpected response for {endpoint}.")
+    return results
 
 def get_fixtures_for_date(date_str):
-    fixtures = fetch_api("fixtures", {"date": date_str})
-    if not fixtures: return []
-    # Limit to 10 fixtures per day to save API limits
-    return fixtures[:10]
+    # Fetch the day's full fixture list. Prediction lookups below are separately capped.
+    return fetch_api("fixtures", {"date": date_str})
 
 def get_prediction(fixture_id):
     preds = fetch_api("predictions", {"fixture": fixture_id})
@@ -65,17 +83,19 @@ def process_day(date_obj, filename, data_dir):
     fixtures = get_fixtures_for_date(date_str)
     predictions = []
     
-    api_calls = 0
+    prediction_attempts = 0
     for f in fixtures:
-        if len(predictions) >= 5: break
-        if api_calls >= 15: break # Stop searching after 15 failed prediction attempts
+        if len(predictions) >= 5:
+            break
+        if prediction_attempts >= 15:
+            break  # Cap prediction lookups to control API usage.
         
         fix_id = f['fixture']['id']
         print(f"Fetching prediction & odds for {fix_id} on {date_str}...")
         
         time.sleep(0.15) 
         pred_data = get_prediction(fix_id)
-        api_calls += 1
+        prediction_attempts += 1
         
         if not pred_data: continue
             
@@ -126,8 +146,18 @@ def process_day(date_obj, filename, data_dir):
         })
         
     output_file = os.path.join(data_dir, filename)
+    result = {"date": date_str, "matches": predictions}
+    if not predictions:
+        if not fixtures:
+            result["message"] = f"No fixtures were returned by API-Football for {date_str}."
+        else:
+            result["message"] = (
+                f"No prediction data was returned for the {prediction_attempts} fixtures checked. "
+                "Try again later or check the API-Football plan and quota."
+            )
+
     with open(output_file, 'w') as f:
-        json.dump({"date": date_str, "matches": predictions}, f, indent=4)
+        json.dump(result, f, indent=4)
     print(f"Saved {len(predictions)} predictions to {output_file}")
 
 def main():
@@ -135,7 +165,7 @@ def main():
     data_dir = os.path.join(script_dir, '..', 'data')
     os.makedirs(data_dir, exist_ok=True)
     
-    today = datetime.now()
+    today = datetime.now(ZoneInfo('Africa/Casablanca'))
     
     # Generate only today's file to save API limits
     process_day(today, 'predictions_today.json', data_dir)
