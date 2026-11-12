@@ -8,25 +8,53 @@ import shutil
 
 API_KEY = os.environ.get('API_FOOTBALL_KEY')
 API_URL = "https://v3.football.api-sports.io"
+MIN_API_REQUEST_INTERVAL = 6.2  # Free plan allows 10 requests per minute.
+_last_api_request_at = 0.0
+
+
+class RateLimitError(RuntimeError):
+    pass
+
+
+def pace_api_request():
+    global _last_api_request_at
+    elapsed = time.monotonic() - _last_api_request_at
+    if elapsed < MIN_API_REQUEST_INTERVAL:
+        time.sleep(MIN_API_REQUEST_INTERVAL - elapsed)
+    _last_api_request_at = time.monotonic()
 
 def fetch_api(endpoint, params):
     if not API_KEY:
         raise RuntimeError("API_FOOTBALL_KEY is missing. Set it in the environment or GitHub Actions secrets.")
 
     headers = {'x-apisports-key': API_KEY}
-    try:
-        response = requests.get(
-            f"{API_URL}/{endpoint}",
-            headers=headers,
-            params=params,
-            timeout=(10, 30)
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"API-Football request failed for {endpoint}: {exc}") from exc
-    except ValueError as exc:
-        raise RuntimeError(f"API-Football returned invalid JSON for {endpoint}.") from exc
+    for attempt in range(2):
+        pace_api_request()
+        try:
+            response = requests.get(
+                f"{API_URL}/{endpoint}",
+                headers=headers,
+                params=params,
+                timeout=(10, 30)
+            )
+            if response.status_code == 429:
+                if attempt == 0:
+                    try:
+                        retry_after = float(response.headers.get('Retry-After', 60))
+                    except (TypeError, ValueError):
+                        retry_after = 60
+                    time.sleep(max(retry_after, 6.2))
+                    continue
+                raise RateLimitError(
+                    f"API-Football rate limit reached for {endpoint}; try again later."
+                )
+            response.raise_for_status()
+            data = response.json()
+            break
+        except requests.RequestException as exc:
+            raise RuntimeError(f"API-Football request failed for {endpoint}: {exc}") from exc
+        except ValueError as exc:
+            raise RuntimeError(f"API-Football returned invalid JSON for {endpoint}.") from exc
 
     errors = data.get('errors')
     if errors and errors not in ({}, []):
@@ -82,6 +110,8 @@ def process_day(date_obj, filename, data_dir):
     date_str = date_obj.strftime('%Y-%m-%d')
     fixtures = get_fixtures_for_date(date_str)
     predictions = []
+    odds_rate_limited = False
+    prediction_rate_limit_message = None
     
     prediction_attempts = 0
     for f in fixtures:
@@ -93,8 +123,12 @@ def process_day(date_obj, filename, data_dir):
         fix_id = f['fixture']['id']
         print(f"Fetching prediction & odds for {fix_id} on {date_str}...")
         
-        time.sleep(0.15) 
-        pred_data = get_prediction(fix_id)
+        try:
+            pred_data = get_prediction(fix_id)
+        except RateLimitError as exc:
+            prediction_rate_limit_message = str(exc)
+            print(prediction_rate_limit_message)
+            break
         prediction_attempts += 1
         
         if not pred_data: continue
@@ -107,9 +141,13 @@ def process_day(date_obj, filename, data_dir):
         home_g = float(str(home_goals_pred).replace('-','0') if home_goals_pred else 0)
         away_g = float(str(away_goals_pred).replace('-','0') if away_goals_pred else 0)
         
-        time.sleep(0.15) 
-        odds_data = get_odds(fix_id)
-        time.sleep(0.15) 
+        odds_data = None
+        if not odds_rate_limited:
+            try:
+                odds_data = get_odds(fix_id)
+            except RateLimitError as exc:
+                odds_rate_limited = True
+                print(f"Skipping further odds lookups: {exc}")
 
         status_short = f['fixture']['status']['short']
         is_finished = status_short in ['FT', 'AET', 'PEN']
@@ -147,8 +185,12 @@ def process_day(date_obj, filename, data_dir):
         
     output_file = os.path.join(data_dir, filename)
     result = {"date": date_str, "matches": predictions}
+    if prediction_rate_limit_message:
+        result["message"] = prediction_rate_limit_message
     if not predictions:
-        if not fixtures:
+        if prediction_rate_limit_message:
+            result["message"] = prediction_rate_limit_message
+        elif not fixtures:
             result["message"] = f"No fixtures were returned by API-Football for {date_str}."
         else:
             result["message"] = (
