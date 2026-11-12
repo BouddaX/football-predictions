@@ -118,8 +118,8 @@ def process_upcoming_fixtures(today, filename, data_dir):
     now_utc = datetime.now(timezone.utc)
     fixtures = []
 
-    # Search today plus the next three days so late-day runs still find upcoming games.
-    for day_offset in range(4):
+    # The free API plan only exposes a short fixture date window, so search today and tomorrow.
+    for day_offset in range(2):
         date_str = (today + timedelta(days=day_offset)).strftime('%Y-%m-%d')
         for fixture in get_fixtures_for_date(date_str):
             kickoff = get_kickoff_datetime(fixture)
@@ -210,7 +210,7 @@ def process_upcoming_fixtures(today, filename, data_dir):
         if prediction_rate_limit_message:
             result["message"] = prediction_rate_limit_message
         elif not fixtures:
-            result["message"] = "No upcoming fixtures found for today and the next 3 days."
+            result["message"] = "No upcoming fixtures found for today or tomorrow."
         else:
             result["message"] = (
                 f"No prediction data was returned for the {prediction_attempts} fixtures checked. "
@@ -228,7 +228,7 @@ def main():
     
     today = datetime.now(ZoneInfo('Africa/Casablanca'))
     
-    # Generate upcoming predictions for today and the next three days.
+    # Generate upcoming predictions for today and tomorrow.
     process_upcoming_fixtures(today, 'predictions_today.json', data_dir)
     
     # We also keep predictions.json as an alias for today to not break backward compatibility
