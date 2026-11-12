@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import time
 import shutil
@@ -69,6 +69,13 @@ def get_fixtures_for_date(date_str):
     # Fetch the day's full fixture list. Prediction lookups below are separately capped.
     return fetch_api("fixtures", {"date": date_str})
 
+def get_kickoff_datetime(fixture):
+    try:
+        kickoff = datetime.fromisoformat(fixture['fixture']['date'].replace('Z', '+00:00'))
+        return kickoff.astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return None
+
 def get_prediction(fixture_id):
     preds = fetch_api("predictions", {"fixture": fixture_id})
     if preds and len(preds) > 0: return preds[0]
@@ -106,9 +113,21 @@ def generate_short_tip(win_percent):
     except:
         return "1X2"
 
-def process_day(date_obj, filename, data_dir):
-    date_str = date_obj.strftime('%Y-%m-%d')
-    fixtures = get_fixtures_for_date(date_str)
+def process_upcoming_fixtures(today, filename, data_dir):
+    today_str = today.strftime('%Y-%m-%d')
+    now_utc = datetime.now(timezone.utc)
+    fixtures = []
+
+    # Search today plus the next three days so late-day runs still find upcoming games.
+    for day_offset in range(4):
+        date_str = (today + timedelta(days=day_offset)).strftime('%Y-%m-%d')
+        for fixture in get_fixtures_for_date(date_str):
+            kickoff = get_kickoff_datetime(fixture)
+            status = fixture.get('fixture', {}).get('status', {}).get('short')
+            if status == 'NS' and kickoff and kickoff > now_utc:
+                fixtures.append(fixture)
+
+    fixtures.sort(key=lambda fixture: get_kickoff_datetime(fixture))
     predictions = []
     odds_rate_limited = False
     prediction_rate_limit_message = None
@@ -121,7 +140,7 @@ def process_day(date_obj, filename, data_dir):
             break  # Cap prediction lookups to control API usage.
         
         fix_id = f['fixture']['id']
-        print(f"Fetching prediction & odds for {fix_id} on {date_str}...")
+        print(f"Fetching prediction & odds for {fix_id} at {f['fixture']['date']}...")
         
         try:
             pred_data = get_prediction(fix_id)
@@ -184,14 +203,14 @@ def process_day(date_obj, filename, data_dir):
         })
         
     output_file = os.path.join(data_dir, filename)
-    result = {"date": date_str, "matches": predictions}
+    result = {"date": today_str, "matches": predictions}
     if prediction_rate_limit_message:
         result["message"] = prediction_rate_limit_message
     if not predictions:
         if prediction_rate_limit_message:
             result["message"] = prediction_rate_limit_message
         elif not fixtures:
-            result["message"] = f"No fixtures were returned by API-Football for {date_str}."
+            result["message"] = "No upcoming fixtures found for today and the next 3 days."
         else:
             result["message"] = (
                 f"No prediction data was returned for the {prediction_attempts} fixtures checked. "
@@ -209,8 +228,8 @@ def main():
     
     today = datetime.now(ZoneInfo('Africa/Casablanca'))
     
-    # Generate only today's file to save API limits
-    process_day(today, 'predictions_today.json', data_dir)
+    # Generate upcoming predictions for today and the next three days.
+    process_upcoming_fixtures(today, 'predictions_today.json', data_dir)
     
     # We also keep predictions.json as an alias for today to not break backward compatibility
     shutil.copyfile(os.path.join(data_dir, 'predictions_today.json'), os.path.join(data_dir, 'predictions.json'))

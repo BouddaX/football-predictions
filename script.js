@@ -183,6 +183,10 @@ function renderPredictions(data) {
 function createMatchCard(match, isVIP) {
     const isFinished = match.status === 'Finished';
     const statusClass = isFinished ? 'finished' : 'pending';
+    const kickoffDate = match.date ? new Date(match.date) : null;
+    const kickoffLabel = kickoffDate && !Number.isNaN(kickoffDate.getTime())
+        ? kickoffDate.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : '';
     
     let actualResultsHtml = '';
     if (isFinished) {
@@ -250,7 +254,7 @@ function createMatchCard(match, isVIP) {
         ${tipBadge}
         <div class="status-badge ${statusClass}">${match.status}</div>
         <div class="match-header" style="flex-direction: column; text-align: center; font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 1px;">
-            ${match.league}
+            ${match.league}${kickoffLabel ? `<br><span style="display:inline-block; margin-top:0.35rem; text-transform:none; letter-spacing:normal;">${kickoffLabel}</span>` : ''}
         </div>
         <div class="match-teams" style="display:flex; justify-content:space-between; align-items:center;">
             <div class="team" style="text-align:center;">
